@@ -1,0 +1,34 @@
+From c38b7faa8bb565553bf125da7244f013822735ff Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Petr=20P=C3=ADsa=C5=99?= <ppisar@redhat.com>
+Date: Thu, 11 May 2017 13:44:14 +0200
+Subject: [PATCH] Provide SvPVCLEAR() macro
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+To build with perl <= 5.25.5.
+
+Signed-off-by: Petr Písař <ppisar@redhat.com>
+---
+ Dumper.xs | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/Dumper.xs b/Dumper.xs
+index 0e7142e..5a21721 100644
+--- a/Dumper.xs
++++ b/Dumper.xs
+@@ -8,6 +8,11 @@
+ #  include "ppport.h"
+ #endif
+ 
++/* SvPVCLEAR was added after 5.25.5 and ppport.h does not provide it */
++#if !defined SvPVCLEAR
++#define SvPVCLEAR(x) sv_setpvs((x), "")
++#endif
++
+ #if PERL_VERSION < 8
+ #  define DD_USE_OLD_ID_FORMAT
+ #endif
+-- 
+2.9.3
+

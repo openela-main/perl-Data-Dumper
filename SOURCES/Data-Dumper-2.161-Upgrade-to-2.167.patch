@@ -1,0 +1,634 @@
+From 9f38b6c605086a67f0d92591f8e8dc99bc1d9164 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Petr=20P=C3=ADsa=C5=99?= <ppisar@redhat.com>
+Date: Thu, 11 May 2017 09:25:35 +0200
+Subject: [PATCH] Upgrade to 2.167
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Unbundled from perl-5.25.12.
+
+Signed-off-by: Petr Písař <ppisar@redhat.com>
+---
+ Changes     |  14 +++++
+ Dumper.pm   |  47 ++++++++---------
+ Dumper.xs   | 167 +++++++++++++++++++++++++++++++++++++++++++++---------------
+ t/bugs.t    |  37 +++++++++++++-
+ t/deparse.t |  22 ++++----
+ 5 files changed, 207 insertions(+), 80 deletions(-)
+
+diff --git a/Changes b/Changes
+index f9ea53f..a5430d5 100644
+--- a/Changes
++++ b/Changes
+@@ -6,6 +6,20 @@ Changes - public release history for Data::Dumper
+ 
+ =over 8
+ 
++=item 2,166 (Nov 29 2016)
++
++Reduce memory usage by not importing from Carp
++Reduce memory usage by removing unused overload require.
++
++=item 2.165 (Nov 20 2016)
++
++Remove impediment to compiling under C++11.
++
++=item 2.164 (Nov 12 2016)
++
++The XS implementation now handles the C<Deparse> option, so using it no
++longer forces use of the pure-Perl version.
++
+ =item 2.161 (Jul 11 2016)
+ 
+ Perl 5.12 fix/workaround until fixed PPPort release.
+diff --git a/Dumper.pm b/Dumper.pm
+index c71ad35..00f6326 100644
+--- a/Dumper.pm
++++ b/Dumper.pm
+@@ -10,16 +10,15 @@
+ package Data::Dumper;
+ 
+ BEGIN {
+-    $VERSION = '2.161'; # Don't forget to set version and release
++    $VERSION = '2.167'; # Don't forget to set version and release
+ }               # date in POD below!
+ 
+ #$| = 1;
+ 
+ use 5.006_001;
+ require Exporter;
+-require overload;
+ 
+-use Carp;
++use Carp ();
+ 
+ BEGIN {
+     @ISA = qw(Exporter);
+@@ -70,7 +69,7 @@ $Maxrecurse = 1000      unless defined $Maxrecurse;
+ sub new {
+   my($c, $v, $n) = @_;
+ 
+-  croak "Usage:  PACKAGE->new(ARRAYREF, [ARRAYREF])"
++  Carp::croak("Usage:  PACKAGE->new(ARRAYREF, [ARRAYREF])")
+     unless (defined($v) && (ref($v) eq 'ARRAY'));
+   $n = [] unless (defined($n) && (ref($n) eq 'ARRAY'));
+ 
+@@ -170,11 +169,11 @@ sub Seen {
+           $s->{seen}{$id} = [$k, $v];
+         }
+         else {
+-          carp "Only refs supported, ignoring non-ref item \$$k";
++          Carp::carp("Only refs supported, ignoring non-ref item \$$k");
+         }
+       }
+       else {
+-        carp "Value of ref must be defined; ignoring undefined item \$$k";
++        Carp::carp("Value of ref must be defined; ignoring undefined item \$$k");
+       }
+     }
+     return $s;
+@@ -195,7 +194,7 @@ sub Values {
+       return $s;
+     }
+     else {
+-      croak "Argument to Values, if provided, must be array ref";
++      Carp::croak("Argument to Values, if provided, must be array ref");
+     }
+   }
+   else {
+@@ -214,7 +213,7 @@ sub Names {
+       return $s;
+     }
+     else {
+-      croak "Argument to Names, if provided, must be array ref";
++      Carp::croak("Argument to Names, if provided, must be array ref");
+     }
+   }
+   else {
+@@ -227,7 +226,6 @@ sub DESTROY {}
+ sub Dump {
+     return &Dumpxs
+     unless $Data::Dumper::Useperl || (ref($_[0]) && $_[0]->{useperl})
+-        || $Data::Dumper::Deparse || (ref($_[0]) && $_[0]->{deparse})
+ 
+             # Use pure perl version on earlier releases on EBCDIC platforms
+         || (! $IS_ASCII && $] lt 5.021_010);
+@@ -439,7 +437,7 @@ sub _dump {
+         if (ref($s->{sortkeys}) eq 'CODE') {
+           $keys = $s->{sortkeys}($val);
+           unless (ref($keys) eq 'ARRAY') {
+-            carp "Sortkeys subroutine did not return ARRAYREF";
++            Carp::carp("Sortkeys subroutine did not return ARRAYREF");
+             $keys = [];
+           }
+         }
+@@ -487,16 +485,16 @@ sub _dump {
+         require B::Deparse;
+         my $sub =  'sub ' . (B::Deparse->new)->coderef2text($val);
+         $pad    =  $s->{sep} . $s->{pad} . $s->{apad} . $s->{xpad} x ($s->{level} - 1);
+-        $sub    =~ s/\n/$pad/gse;
++        $sub    =~ s/\n/$pad/gs;
+         $out   .=  $sub;
+       }
+       else {
+         $out .= 'sub { "DUMMY" }';
+-        carp "Encountered CODE ref, using dummy placeholder" if $s->{purity};
++        Carp::carp("Encountered CODE ref, using dummy placeholder") if $s->{purity};
+       }
+     }
+     else {
+-      croak "Can't handle '$realtype' type";
++      Carp::croak("Can't handle '$realtype' type");
+     }
+ 
+     if ($realpack and !$no_bless) { # we have a blessed ref
+@@ -1212,9 +1210,10 @@ $Data::Dumper::Deparse  I<or>  $I<OBJ>->Deparse(I<[NEWVAL]>)
+ 
+ Can be set to a boolean value to control whether code references are
+ turned into perl source code. If set to a true value, C<B::Deparse>
+-will be used to get the source of the code reference. Using this option
+-will force using the Perl implementation of the dumper, since the fast
+-XSUB implementation doesn't support it.
++will be used to get the source of the code reference. In older versions,
++using this option imposed a significant performance penalty when dumping
++parts of a data structure other than code references, but that is no
++longer the case.
+ 
+ Caution : use this option only if you know that your coderefs will be
+ properly reconstructed by C<B::Deparse>.
+@@ -1435,15 +1434,9 @@ the C<Deparse> flag), an anonymous subroutine that
+ contains the string '"DUMMY"' will be inserted in its place, and a warning
+ will be printed if C<Purity> is set.  You can C<eval> the result, but bear
+ in mind that the anonymous sub that gets created is just a placeholder.
+-Someday, perl will have a switch to cache-on-demand the string
+-representation of a compiled piece of code, I hope.  If you have prior
+-knowledge of all the code refs that your data structures are likely
+-to have, you can use the C<Seen> method to pre-seed the internal reference
+-table and make the dumped output point to them, instead.  See L</EXAMPLES>
+-above.
+-
+-The C<Deparse> flag makes Dump() run slower, since the XSUB
+-implementation does not support it.
++Even using the C<Deparse> flag will in some cases produce results that
++behave differently after being passed to C<eval>; see the documentation
++for L<B::Deparse>.
+ 
+ SCALAR objects have the weirdest looking C<bless> workaround.
+ 
+@@ -1466,13 +1459,13 @@ be to use the C<Sortkeys> filter of Data::Dumper.
+ 
+ Gurusamy Sarathy        gsar@activestate.com
+ 
+-Copyright (c) 1996-2016 Gurusamy Sarathy. All rights reserved.
++Copyright (c) 1996-2017 Gurusamy Sarathy. All rights reserved.
+ This program is free software; you can redistribute it and/or
+ modify it under the same terms as Perl itself.
+ 
+ =head1 VERSION
+ 
+-Version 2.161  (July 11 2016)
++Version 2.167  (January 4 2017)
+ 
+ =head1 SEE ALSO
+ 
+diff --git a/Dumper.xs b/Dumper.xs
+index b22088f..0e7142e 100644
+--- a/Dumper.xs
++++ b/Dumper.xs
+@@ -63,6 +63,7 @@ typedef struct {
+     I32 useqq;
+     int use_sparse_seen_hash;
+     int trailingcomma;
++    int deparse;
+ } Style;
+ 
+ static STRLEN num_q (const char *s, STRLEN slen);
+@@ -369,7 +370,7 @@ esc_q_utf8(pTHX_ SV* sv, const char *src, STRLEN slen, I32 do_utf8, I32 useqq)
+             UV k;
+ 
+             if (do_utf8
+-                && ! isASCII(*(U8*)s)
++                && ! isASCII(*s)
+                     /* Exclude non-ASCII low ordinal controls.  This should be
+                      * optimized out by the compiler on ASCII platforms; if not
+                      * could wrap it in a #ifdef EBCDIC, but better to avoid
+@@ -387,11 +388,11 @@ esc_q_utf8(pTHX_ SV* sv, const char *src, STRLEN slen, I32 do_utf8, I32 useqq)
+                 increment = (k == 0 && *s != '\0') ? 1 : UTF8SKIP(s);
+ 
+ #if PERL_VERSION < 10
+-                sprintf(r, "\\x{%"UVxf"}", k);
++                sprintf(r, "\\x{%" UVxf "}", k);
+                 r += strlen(r);
+                 /* my_sprintf is not supported by ppport.h */
+ #else
+-                r = r + my_sprintf(r, "\\x{%"UVxf"}", k);
++                r = r + my_sprintf(r, "\\x{%" UVxf "}", k);
+ #endif
+                 continue;
+             }
+@@ -505,6 +506,53 @@ sv_x(pTHX_ SV *sv, const char *str, STRLEN len, I32 n)
+     return sv;
+ }
+ 
++static SV *
++deparsed_output(pTHX_ SV *val)
++{
++    SV *text;
++    int n;
++    dSP;
++
++    /* This is passed to load_module(), which decrements its ref count and
++     * modifies it (so we also can't reuse it below) */
++    SV *pkg = newSVpvs("B::Deparse");
++
++    load_module(PERL_LOADMOD_NOIMPORT, pkg, 0);
++
++    SAVETMPS;
++
++    PUSHMARK(SP);
++    mXPUSHs(newSVpvs("B::Deparse"));
++    PUTBACK;
++
++    n = call_method("new", G_SCALAR);
++    SPAGAIN;
++
++    if (n != 1) {
++        croak("B::Deparse->new returned %d items, but expected exactly 1", n);
++    }
++
++    PUSHMARK(SP - n);
++    XPUSHs(val);
++    PUTBACK;
++
++    n = call_method("coderef2text", G_SCALAR);
++    SPAGAIN;
++
++    if (n != 1) {
++        croak("$b_deparse->coderef2text returned %d items, but expected exactly 1", n);
++    }
++
++    text = POPs;
++    SvREFCNT_inc(text);         /* the caller will mortalise this */
++
++    FREETMPS;
++
++    PUTBACK;
++
++    return text;
++}
++
+ /*
+  * This ought to be split into smaller functions. (it is one long function since
+  * it exactly parallels the perl version, which was one long thing for
+@@ -565,14 +613,14 @@ DD_dump(pTHX_ SV *val, const char *name, STRLEN namelen, SV *retval, HV *seenhv,
+             i = perl_call_method(SvPVX_const(style->freezer), G_EVAL|G_VOID|G_DISCARD);
+ 	    SPAGAIN;
+ 	    if (SvTRUE(ERRSV))
+-		warn("WARNING(Freezer method call failed): %"SVf"", ERRSV);
++		warn("WARNING(Freezer method call failed): %" SVf, ERRSV);
+ 	    PUTBACK; FREETMPS; LEAVE;
+ 	}
+ 	
+ 	ival = SvRV(val);
+ 	realtype = SvTYPE(ival);
+ #ifdef DD_USE_OLD_ID_FORMAT
+-        idlen = my_snprintf(id, sizeof(id), "0x%"UVxf, PTR2UV(ival));
++        idlen = my_snprintf(id, sizeof(id), "0x%" UVxf, PTR2UV(ival));
+ #else
+ 	id_buffer = PTR2UV(ival);
+ 	idlen = sizeof(id_buffer);
+@@ -630,7 +678,7 @@ DD_dump(pTHX_ SV *val, const char *name, STRLEN namelen, SV *retval, HV *seenhv,
+ #ifdef DD_USE_OLD_ID_FORMAT
+ 		    warn("ref name not found for %s", id);
+ #else
+-		    warn("ref name not found for 0x%"UVxf, PTR2UV(ival));
++		    warn("ref name not found for 0x%" UVxf, PTR2UV(ival));
+ #endif
+ 		    return 0;
+ 		}
+@@ -848,10 +896,10 @@ DD_dump(pTHX_ SV *val, const char *name, STRLEN namelen, SV *retval, HV *seenhv,
+ 		ilen = inamelen;
+ 		sv_setiv(ixsv, ix);
+ #if PERL_VERSION < 10
+-                (void) sprintf(iname+ilen, "%"IVdf, (IV)ix);
++                (void) sprintf(iname+ilen, "%" IVdf, (IV)ix);
+ 		ilen = strlen(iname);
+ #else
+-                ilen = ilen + my_sprintf(iname+ilen, "%"IVdf, (IV)ix);
++                ilen = ilen + my_sprintf(iname+ilen, "%" IVdf, (IV)ix);
+ #endif
+ 		iname[ilen++] = ']'; iname[ilen] = '\0';
+                 if (style->indent >= 3) {
+@@ -886,7 +934,6 @@ DD_dump(pTHX_ SV *val, const char *name, STRLEN namelen, SV *retval, HV *seenhv,
+ 	    SV *sname;
+ 	    HE *entry = NULL;
+ 	    char *key;
+-	    STRLEN klen;
+ 	    SV *hval;
+ 	    AV *keys = NULL;
+ 	
+@@ -976,6 +1023,7 @@ DD_dump(pTHX_ SV *val, const char *name, STRLEN namelen, SV *retval, HV *seenhv,
+                 char *nkey_buffer = NULL;
+                 STRLEN nticks = 0;
+ 		SV* keysv;
++                STRLEN klen;
+ 		STRLEN keylen;
+                 STRLEN nlen;
+ 		bool do_utf8 = FALSE;
+@@ -1029,7 +1077,7 @@ DD_dump(pTHX_ SV *val, const char *name, STRLEN namelen, SV *retval, HV *seenhv,
+                 if (style->quotekeys || key_needs_quote(key,keylen)) {
+                     if (do_utf8 || style->useqq) {
+                         STRLEN ocur = SvCUR(retval);
+-                        nlen = esc_q_utf8(aTHX_ retval, key, klen, do_utf8, style->useqq);
++                        klen = nlen = esc_q_utf8(aTHX_ retval, key, klen, do_utf8, style->useqq);
+                         nkey = SvPVX(retval) + ocur;
+                     }
+                     else {
+@@ -1095,9 +1143,41 @@ DD_dump(pTHX_ SV *val, const char *name, STRLEN namelen, SV *retval, HV *seenhv,
+ 	    SvREFCNT_dec(totpad);
+ 	}
+ 	else if (realtype == SVt_PVCV) {
+-	    sv_catpvs(retval, "sub { \"DUMMY\" }");
+-            if (style->purity)
+-		warn("Encountered CODE ref, using dummy placeholder");
++            if (style->deparse) {
++                SV *deparsed = sv_2mortal(deparsed_output(aTHX_ val));
++                SV *fullpad = sv_2mortal(newSVsv(style->sep));
++                const char *p;
++                STRLEN plen;
++                I32 i;
++
++                sv_catsv(fullpad, style->pad);
++                sv_catsv(fullpad, apad);
++                for (i = 0; i < level; i++) {
++                    sv_catsv(fullpad, style->xpad);
++                }
++
++                sv_catpvs(retval, "sub ");
++                p = SvPV(deparsed, plen);
++                while (plen > 0) {
++                    const char *nl = (const char *) memchr(p, '\n', plen);
++                    if (!nl) {
++                        sv_catpvn(retval, p, plen);
++                        break;
++                    }
++                    else {
++                        size_t n = nl - p;
++                        sv_catpvn(retval, p, n);
++                        sv_catsv(retval, fullpad);
++                        p += n + 1;
++                        plen -= n + 1;
++                    }
++                }
++            }
++            else {
++                sv_catpvs(retval, "sub { \"DUMMY\" }");
++                if (style->purity)
++                    warn("Encountered CODE ref, using dummy placeholder");
++            }
+ 	}
+ 	else {
+ 	    warn("cannot handle ref type %d", (int)realtype);
+@@ -1144,7 +1224,7 @@ DD_dump(pTHX_ SV *val, const char *name, STRLEN namelen, SV *retval, HV *seenhv,
+ 	
+ 	if (namelen) {
+ #ifdef DD_USE_OLD_ID_FORMAT
+-	    idlen = my_snprintf(id, sizeof(id), "0x%"UVxf, PTR2UV(val));
++	    idlen = my_snprintf(id, sizeof(id), "0x%" UVxf, PTR2UV(val));
+ #else
+ 	    id_buffer = PTR2UV(val);
+ 	    idlen = sizeof(id_buffer);
+@@ -1184,9 +1264,9 @@ DD_dump(pTHX_ SV *val, const char *name, STRLEN namelen, SV *retval, HV *seenhv,
+         if (DD_is_integer(val)) {
+             STRLEN len;
+ 	    if (SvIsUV(val))
+-	      len = my_snprintf(tmpbuf, sizeof(tmpbuf), "%"UVuf, SvUV(val));
++	      len = my_snprintf(tmpbuf, sizeof(tmpbuf), "%" UVuf, SvUV(val));
+ 	    else
+-	      len = my_snprintf(tmpbuf, sizeof(tmpbuf), "%"IVdf, SvIV(val));
++	      len = my_snprintf(tmpbuf, sizeof(tmpbuf), "%" IVdf, SvIV(val));
+             if (SvPOK(val)) {
+               /* Need to check to see if this is a string such as " 0".
+                  I'm assuming from sprintf isn't going to clash with utf8. */
+@@ -1412,53 +1492,55 @@ Data_Dumper_Dumpxs(href, ...)
+ 		&& (hv = (HV*)SvRV((SV*)href))
+ 		&& SvTYPE(hv) == SVt_PVHV)		{
+ 
+-		if ((svp = hv_fetch(hv, "seen", 4, FALSE)) && SvROK(*svp))
++		if ((svp = hv_fetchs(hv, "seen", FALSE)) && SvROK(*svp))
+ 		    seenhv = (HV*)SvRV(*svp);
+                 else
+                     style.use_sparse_seen_hash = 1;
+-		if ((svp = hv_fetch(hv, "noseen", 6, FALSE)))
++		if ((svp = hv_fetchs(hv, "noseen", FALSE)))
+                     style.use_sparse_seen_hash = (SvOK(*svp) && SvIV(*svp) != 0);
+-		if ((svp = hv_fetch(hv, "todump", 6, FALSE)) && SvROK(*svp))
++		if ((svp = hv_fetchs(hv, "todump", FALSE)) && SvROK(*svp))
+ 		    todumpav = (AV*)SvRV(*svp);
+-		if ((svp = hv_fetch(hv, "names", 5, FALSE)) && SvROK(*svp))
++		if ((svp = hv_fetchs(hv, "names", FALSE)) && SvROK(*svp))
+ 		    namesav = (AV*)SvRV(*svp);
+-		if ((svp = hv_fetch(hv, "indent", 6, FALSE)))
++		if ((svp = hv_fetchs(hv, "indent", FALSE)))
+                     style.indent = SvIV(*svp);
+-		if ((svp = hv_fetch(hv, "purity", 6, FALSE)))
++		if ((svp = hv_fetchs(hv, "purity", FALSE)))
+                     style.purity = SvIV(*svp);
+-		if ((svp = hv_fetch(hv, "terse", 5, FALSE)))
++		if ((svp = hv_fetchs(hv, "terse", FALSE)))
+ 		    terse = SvTRUE(*svp);
+-		if ((svp = hv_fetch(hv, "useqq", 5, FALSE)))
++		if ((svp = hv_fetchs(hv, "useqq", FALSE)))
+                     style.useqq = SvTRUE(*svp);
+-		if ((svp = hv_fetch(hv, "pad", 3, FALSE)))
++		if ((svp = hv_fetchs(hv, "pad", FALSE)))
+                     style.pad = *svp;
+-		if ((svp = hv_fetch(hv, "xpad", 4, FALSE)))
++		if ((svp = hv_fetchs(hv, "xpad", FALSE)))
+                     style.xpad = *svp;
+-		if ((svp = hv_fetch(hv, "apad", 4, FALSE)))
++		if ((svp = hv_fetchs(hv, "apad", FALSE)))
+ 		    apad = *svp;
+-		if ((svp = hv_fetch(hv, "sep", 3, FALSE)))
++		if ((svp = hv_fetchs(hv, "sep", FALSE)))
+                     style.sep = *svp;
+-		if ((svp = hv_fetch(hv, "pair", 4, FALSE)))
++		if ((svp = hv_fetchs(hv, "pair", FALSE)))
+                     style.pair = *svp;
+-		if ((svp = hv_fetch(hv, "varname", 7, FALSE)))
++		if ((svp = hv_fetchs(hv, "varname", FALSE)))
+ 		    varname = *svp;
+-		if ((svp = hv_fetch(hv, "freezer", 7, FALSE)))
++		if ((svp = hv_fetchs(hv, "freezer", FALSE)))
+                     style.freezer = *svp;
+-		if ((svp = hv_fetch(hv, "toaster", 7, FALSE)))
++		if ((svp = hv_fetchs(hv, "toaster", FALSE)))
+                     style.toaster = *svp;
+-		if ((svp = hv_fetch(hv, "deepcopy", 8, FALSE)))
++		if ((svp = hv_fetchs(hv, "deepcopy", FALSE)))
+                     style.deepcopy = SvTRUE(*svp);
+-		if ((svp = hv_fetch(hv, "quotekeys", 9, FALSE)))
++		if ((svp = hv_fetchs(hv, "quotekeys", FALSE)))
+                     style.quotekeys = SvTRUE(*svp);
+-                if ((svp = hv_fetch(hv, "trailingcomma", 13, FALSE)))
++                if ((svp = hv_fetchs(hv, "trailingcomma", FALSE)))
+                     style.trailingcomma = SvTRUE(*svp);
+-		if ((svp = hv_fetch(hv, "bless", 5, FALSE)))
++                if ((svp = hv_fetchs(hv, "deparse", FALSE)))
++                    style.deparse = SvTRUE(*svp);
++		if ((svp = hv_fetchs(hv, "bless", FALSE)))
+                     style.bless = *svp;
+-		if ((svp = hv_fetch(hv, "maxdepth", 8, FALSE)))
++		if ((svp = hv_fetchs(hv, "maxdepth", FALSE)))
+                     style.maxdepth = SvIV(*svp);
+-		if ((svp = hv_fetch(hv, "maxrecurse", 10, FALSE)))
++		if ((svp = hv_fetchs(hv, "maxrecurse", FALSE)))
+                     style.maxrecurse = SvIV(*svp);
+-		if ((svp = hv_fetch(hv, "sortkeys", 8, FALSE))) {
++		if ((svp = hv_fetchs(hv, "sortkeys", FALSE))) {
+                     SV *sv = *svp;
+                     if (! SvTRUE(sv))
+                         style.sortkeys = NULL;
+@@ -1525,9 +1607,10 @@ Data_Dumper_Dumpxs(href, ...)
+ 		    }
+ 		    else {
+ 			STRLEN nchars;
+-			sv_setpvn(name, "$", 1);
++			sv_setpvs(name, "$");
+ 			sv_catsv(name, varname);
+-			nchars = my_snprintf(tmpbuf, sizeof(tmpbuf), "%"IVdf, (IV)(i+1));
++			nchars = my_snprintf(tmpbuf, sizeof(tmpbuf), "%" IVdf,
++                                                                     (IV)(i+1));
+ 			sv_catpvn(name, tmpbuf, nchars);
+ 		    }
+ 		
+@@ -1575,7 +1658,7 @@ Data_Dumper_Dumpxs(href, ...)
+ 			sv_catpvs(retval, ";");
+                         sv_catsv(retval, style.sep);
+ 		    }
+-		    sv_setpvn(valstr, "", 0);
++		    SvPVCLEAR(valstr);
+ 		    if (gimme == G_ARRAY) {
+ 			XPUSHs(sv_2mortal(retval));
+ 			if (i < imax)	/* not the last time thro ? */
+diff --git a/t/bugs.t b/t/bugs.t
+index a440b0a..5db82da 100644
+--- a/t/bugs.t
++++ b/t/bugs.t
+@@ -12,7 +12,7 @@ BEGIN {
+ }
+ 
+ use strict;
+-use Test::More tests => 15;
++use Test::More tests => 24;
+ use Data::Dumper;
+ 
+ {
+@@ -144,4 +144,39 @@ SKIP: {
+   &$tests;
+ }
+ 
++{ # https://rt.perl.org/Ticket/Display.html?id=128524
++    my $want;
++    my $runtime = "runtime";
++    my $requires = "requires";
++    utf8::upgrade(my $uruntime = $runtime);
++    utf8::upgrade(my $urequires = $requires);
++    for my $run ($runtime, $uruntime) {
++        for my $req ($requires, $urequires) {
++            my $data = { $run => { $req => { foo => "bar" } } };
++            local $Data::Dumper::Useperl = 1;
++            # we want them all the same
++            defined $want or $want = Dumper($data);
++            is(Dumper( $data ), $want, "utf-8 indents");
++          SKIP:
++            {
++                defined &Data::Dumper::Dumpxs
++                  or skip "No XS available", 1;
++                local $Data::Dumper::Useperl = 0;
++                is(Dumper( $data ), $want, "utf8-indents");
++            }
++        }
++    }
++}
++
++# RT#130487 - stack management bug in XS deparse
++SKIP: {
++    skip "No XS available", 1 if !defined &Data::Dumper::Dumpxs;
++    sub rt130487_args { 0 + @_ }
++    my $code = sub {};
++    local $Data::Dumper::Useperl = 0;
++    local $Data::Dumper::Deparse = 1;
++    my $got = rt130487_args( Dumper($code) );
++    is($got, 1, "stack management in XS deparse works, rt 130487");
++}
++
+ # EOF
+diff --git a/t/deparse.t b/t/deparse.t
+index c281fce..cddde8c 100644
+--- a/t/deparse.t
++++ b/t/deparse.t
+@@ -15,7 +15,7 @@ BEGIN {
+ use strict;
+ 
+ use Data::Dumper;
+-use Test::More tests =>  8;
++use Test::More tests =>  16;
+ use lib qw( ./t/lib );
+ use Testing qw( _dumptostr );
+ 
+@@ -24,7 +24,9 @@ use Testing qw( _dumptostr );
+ 
+ note("\$Data::Dumper::Deparse and Deparse()");
+ 
+-{
++for my $useperl (0, 1) {
++    local $Data::Dumper::Useperl = $useperl;
++
+     my ($obj, %dumps, $deparse, $starting);
+     use strict;
+     my $struct = { foo => "bar\nbaz", quux => sub { "fleem" } };
+@@ -46,11 +48,11 @@ note("\$Data::Dumper::Deparse and Deparse()");
+     $dumps{'objzero'} = _dumptostr($obj);
+ 
+     is($dumps{'noprev'}, $dumps{'dddzero'},
+-        "No previous setting and \$Data::Dumper::Deparse = 0 are equivalent");
++        "No previous setting and \$Data::Dumper::Deparse = 0 are equivalent (useperl=$useperl)");
+     is($dumps{'noprev'}, $dumps{'objempty'},
+-        "No previous setting and Deparse() are equivalent");
++        "No previous setting and Deparse() are equivalent (useperl=$useperl)");
+     is($dumps{'noprev'}, $dumps{'objzero'},
+-        "No previous setting and Deparse(0) are equivalent");
++        "No previous setting and Deparse(0) are equivalent (useperl=$useperl)");
+ 
+     local $Data::Dumper::Deparse = 1;
+     $obj = Data::Dumper->new( [ $struct ] );
+@@ -62,19 +64,19 @@ note("\$Data::Dumper::Deparse and Deparse()");
+     $dumps{'objone'} = _dumptostr($obj);
+ 
+     is($dumps{'dddtrue'}, $dumps{'objone'},
+-        "\$Data::Dumper::Deparse = 1 and Deparse(1) are equivalent");
++        "\$Data::Dumper::Deparse = 1 and Deparse(1) are equivalent (useperl=$useperl)");
+ 
+     isnt($dumps{'dddzero'}, $dumps{'dddtrue'},
+-        "\$Data::Dumper::Deparse = 0 differs from \$Data::Dumper::Deparse = 1");
++        "\$Data::Dumper::Deparse = 0 differs from \$Data::Dumper::Deparse = 1 (useperl=$useperl)");
+ 
+     like($dumps{'dddzero'},
+         qr/quux.*?sub.*?DUMMY/s,
+-        "\$Data::Dumper::Deparse = 0 reports DUMMY instead of deparsing coderef");
++        "\$Data::Dumper::Deparse = 0 reports DUMMY instead of deparsing coderef (useperl=$useperl)");
+     unlike($dumps{'dddtrue'},
+         qr/quux.*?sub.*?DUMMY/s,
+-        "\$Data::Dumper::Deparse = 1 does not report DUMMY");
++        "\$Data::Dumper::Deparse = 1 does not report DUMMY (useperl=$useperl)");
+     like($dumps{'dddtrue'},
+         qr/quux.*?sub.*?use\sstrict.*?fleem/s,
+-        "\$Data::Dumper::Deparse = 1 deparses coderef");
++        "\$Data::Dumper::Deparse = 1 deparses coderef (useperl=$useperl)");
+ }
+ 
+-- 
+2.9.3
+

@@ -1,0 +1,112 @@
+From 76b7c82c2947d64a3494175ef6530b3fba8a499d Mon Sep 17 00:00:00 2001
+From: Zefram <zefram@fysh.org>
+Date: Wed, 10 Jan 2018 21:09:45 +0000
+Subject: [PATCH] fix Data-Dumper postentry for quoted glob
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+In Data-Dumper, where a glob with a quoted name required a postentry,
+the name part of the postentry was being emitted as just "}".  This was
+an old bug affecting upgraded glob names, which the recent commit
+abda9fe0fe75ae824723761c1c98af958f17a41c made affect all quoted glob
+names.  Fix the postentry name to encompass the entire quoted name.
+Fixes [perl #132695].
+
+Petr Písař: Ported to Data-Dumpe-2.167 from perl
+fb5043174b070927d312677f0a2f04a29b11349a.
+
+Signed-off-by: Petr Písař <ppisar@redhat.com>
+---
+ Dumper.xs  | 11 ++++++-----
+ t/dumper.t | 32 +++++++++++++++++++++++++++++++-
+ 2 files changed, 37 insertions(+), 6 deletions(-)
+
+diff --git a/Dumper.xs b/Dumper.xs
+index 8a16e04..206e8b5 100644
+--- a/Dumper.xs
++++ b/Dumper.xs
+@@ -1300,11 +1300,11 @@ DD_dump(pTHX_ SV *val, const char *name, STRLEN namelen, SV *retval, HV *seenhv,
+ 		    i = 0; else i -= 4;
+ 	    }
+             if (globname_needs_quote(c,i)) {
+-		sv_grow(retval, SvCUR(retval)+2);
++		sv_grow(retval, SvCUR(retval)+3);
+ 		r = SvPVX(retval)+SvCUR(retval);
+-		r[0] = '*'; r[1] = '{';
++		r[0] = '*'; r[1] = '{'; r[2] = 0;
+ 		SvCUR_set(retval, SvCUR(retval)+2);
+-                esc_q_utf8(aTHX_ retval, c, i,
++                i = 3 + esc_q_utf8(aTHX_ retval, c, i,
+ #ifdef GvNAMEUTF8
+ 			!!GvNAMEUTF8(val)
+ #else
+@@ -1314,15 +1314,16 @@ DD_dump(pTHX_ SV *val, const char *name, STRLEN namelen, SV *retval, HV *seenhv,
+ 		sv_grow(retval, SvCUR(retval)+2);
+ 		r = SvPVX(retval)+SvCUR(retval);
+ 		r[0] = '}'; r[1] = '\0';
+-		i = 1;
++		SvCUR_set(retval, SvCUR(retval)+1);
++		r = r+1 - i;
+ 	    }
+ 	    else {
+ 		sv_grow(retval, SvCUR(retval)+i+2);
+ 		r = SvPVX(retval)+SvCUR(retval);
+ 		r[0] = '*'; strcpy(r+1, c);
+ 		i++;
++		SvCUR_set(retval, SvCUR(retval)+i);
+ 	    }
+-	    SvCUR_set(retval, SvCUR(retval)+i);
+ 
+             if (style->purity) {
+ 		static const char* const entries[] = { "{SCALAR}", "{ARRAY}", "{HASH}" };
+diff --git a/t/dumper.t b/t/dumper.t
+index 0c12f34..e09a2dd 100644
+--- a/t/dumper.t
++++ b/t/dumper.t
+@@ -108,7 +108,7 @@ sub SKIP_TEST {
+   ++$TNUM; print "ok $TNUM # skip $reason\n";
+ }
+ 
+-$TMAX = 456;
++$TMAX = 468;
+ 
+ # Force Data::Dumper::Dump to use perl. We test Dumpxs explicitly by calling
+ # it direct. Out here it lets us knobble the next if to test that the perl
+@@ -1773,3 +1773,33 @@ EOT
+   TEST (q(Data::Dumper->Dumpxs([\@globs], ["globs"])), 'globs: Dumpxs()')
+     if $XS;
+ }
++#############
++$WANT = <<'EOT';
++#$v = {
++#  a => \*::ppp,
++#  b => \*{'::a/b'},
++#  c => \*{"::a\x{2603}b"}
++#};
++#*::ppp = {
++#  a => 1
++#};
++#*{'::a/b'} = {
++#  b => 3
++#};
++#*{"::a\x{2603}b"} = {
++#  c => 5
++#};
++EOT
++{
++  *ppp = { a => 1 };
++  *{"a/b"} = { b => 3 };
++  *{"a\x{2603}b"} = { c => 5 };
++  our $v = { a => \*ppp, b => \*{"a/b"}, c => \*{"a\x{2603}b"} };
++  local $Data::Dumper::Purity = 1;
++  TEST (q(Data::Dumper->Dump([$v], ["v"])), 'glob purity: Dump()');
++  TEST (q(Data::Dumper->Dumpxs([$v], ["v"])), 'glob purity: Dumpxs()') if $XS;
++  $WANT =~ tr/'/"/;
++  local $Data::Dumper::Useqq = 1;
++  TEST (q(Data::Dumper->Dump([$v], ["v"])), 'glob purity: Dump()');
++  TEST (q(Data::Dumper->Dumpxs([$v], ["v"])), 'glob purity: Dumpxs()') if $XS;
++}
+-- 
+2.13.6
+
