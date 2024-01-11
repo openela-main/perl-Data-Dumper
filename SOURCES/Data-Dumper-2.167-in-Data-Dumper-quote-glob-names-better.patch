@@ -1,0 +1,134 @@
+From 69beb4272d324bb0724b140b5ddca517e90d89b9 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Petr=20P=C3=ADsa=C5=99?= <ppisar@redhat.com>
+Date: Tue, 5 Dec 2017 10:59:42 +0100
+Subject: [PATCH] in Data-Dumper, quote glob names better
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Ported to Data-Dumper-1.167 from perl git tree:
+
+commit abda9fe0fe75ae824723761c1c98af958f17a41c
+Author: Zefram <zefram@fysh.org>
+Date:   Fri Dec 1 17:35:35 2017 +0000
+
+    in Data-Dumper, quote glob names better
+
+    Glob name quoting should obey Useqq.  Fixes [perl #119831].
+
+Signed-off-by: Petr Písař <ppisar@redhat.com>
+---
+ Dumper.pm  |  4 ++--
+ Dumper.xs  | 22 +++++++---------------
+ t/dumper.t | 35 ++++++++++++++++++++++++++++++++++-
+ 3 files changed, 43 insertions(+), 18 deletions(-)
+
+diff --git a/Dumper.pm b/Dumper.pm
+index 00f6326..696964a 100644
+--- a/Dumper.pm
++++ b/Dumper.pm
+@@ -527,8 +527,8 @@ sub _dump {
+     $ref = \$val;
+     if (ref($ref) eq 'GLOB') {  # glob
+       my $name = substr($val, 1);
+-      if ($name =~ /^[A-Za-z_][\w:]*$/ && $name ne 'main::') {
+-        $name =~ s/^main::/::/;
++      $name =~ s/^main::(?!\z)/::/;
++      if ($name =~ /\A(?:[A-Z_a-z][0-9A-Z_a-z]*)?::(?:[0-9A-Z_a-z]+::)*[0-9A-Z_a-z]*\z/ && $name ne 'main::') {
+         $sname = $name;
+       }
+       else {
+diff --git a/Dumper.xs b/Dumper.xs
+index 5a21721..8a16e04 100644
+--- a/Dumper.xs
++++ b/Dumper.xs
+@@ -1300,29 +1300,21 @@ DD_dump(pTHX_ SV *val, const char *name, STRLEN namelen, SV *retval, HV *seenhv,
+ 		    i = 0; else i -= 4;
+ 	    }
+             if (globname_needs_quote(c,i)) {
+-#ifdef GvNAMEUTF8
+-	      if (GvNAMEUTF8(val)) {
+ 		sv_grow(retval, SvCUR(retval)+2);
+ 		r = SvPVX(retval)+SvCUR(retval);
+ 		r[0] = '*'; r[1] = '{';
+ 		SvCUR_set(retval, SvCUR(retval)+2);
+-                esc_q_utf8(aTHX_ retval, c, i, 1, style->useqq);
++                esc_q_utf8(aTHX_ retval, c, i,
++#ifdef GvNAMEUTF8
++			!!GvNAMEUTF8(val)
++#else
++			0
++#endif
++			, style->useqq);
+ 		sv_grow(retval, SvCUR(retval)+2);
+ 		r = SvPVX(retval)+SvCUR(retval);
+ 		r[0] = '}'; r[1] = '\0';
+ 		i = 1;
+-	      }
+-	      else
+-#endif
+-	      {
+-		sv_grow(retval, SvCUR(retval)+6+2*i);
+-		r = SvPVX(retval)+SvCUR(retval);
+-		r[0] = '*'; r[1] = '{';	r[2] = '\'';
+-		i += esc_q(r+3, c, i);
+-		i += 3;
+-		r[i++] = '\''; r[i++] = '}';
+-		r[i] = '\0';
+-	      }
+ 	    }
+ 	    else {
+ 		sv_grow(retval, SvCUR(retval)+i+2);
+diff --git a/t/dumper.t b/t/dumper.t
+index 643160a..0c12f34 100644
+--- a/t/dumper.t
++++ b/t/dumper.t
+@@ -108,7 +108,7 @@ sub SKIP_TEST {
+   ++$TNUM; print "ok $TNUM # skip $reason\n";
+ }
+ 
+-$TMAX = 450;
++$TMAX = 456;
+ 
+ # Force Data::Dumper::Dump to use perl. We test Dumpxs explicitly by calling
+ # it direct. Out here it lets us knobble the next if to test that the perl
+@@ -1740,3 +1740,36 @@ EOT
+         TEST (qq(Dumper("\n")), '\n alone');
+         TEST (qq(Data::Dumper::DumperX("\n")), '\n alone') if $XS;
+ }
++#############
++our @globs = map { $_, \$_ } map { *$_ } map { $_, "s::$_" }
++		"foo", "\1bar", "L\x{e9}on", "m\x{100}cron", "snow\x{2603}";
++$WANT = <<'EOT';
++#$globs = [
++#  *::foo,
++#  \*::foo,
++#  *s::foo,
++#  \*s::foo,
++#  *{"::\1bar"},
++#  \*{"::\1bar"},
++#  *{"s::\1bar"},
++#  \*{"s::\1bar"},
++#  *{"::L\351on"},
++#  \*{"::L\351on"},
++#  *{"s::L\351on"},
++#  \*{"s::L\351on"},
++#  *{"::m\x{100}cron"},
++#  \*{"::m\x{100}cron"},
++#  *{"s::m\x{100}cron"},
++#  \*{"s::m\x{100}cron"},
++#  *{"::snow\x{2603}"},
++#  \*{"::snow\x{2603}"},
++#  *{"s::snow\x{2603}"},
++#  \*{"s::snow\x{2603}"}
++#];
++EOT
++{
++  local $Data::Dumper::Useqq = 1;
++  TEST (q(Data::Dumper->Dump([\@globs], ["globs"])), 'globs: Dump()');
++  TEST (q(Data::Dumper->Dumpxs([\@globs], ["globs"])), 'globs: Dumpxs()')
++    if $XS;
++}
+-- 
+2.13.6
+
